@@ -4,6 +4,8 @@ import datetime
 import uuid
 import os
 import json
+import mysql.connector
+from mysql.connector import Error
 
 # Set page configuration
 st.set_page_config(
@@ -11,6 +13,117 @@ st.set_page_config(
     page_icon="🥎",
     layout="wide"
 )
+
+# Database configuration
+def get_db_config():
+    """Get database configuration from environment variables or Streamlit secrets"""
+    try:
+        # Try Streamlit secrets first (for cloud deployment)
+        if hasattr(st, 'secrets') and 'database' in st.secrets:
+            return {
+                'host': st.secrets.database.host,
+                'port': st.secrets.database.port,
+                'database': st.secrets.database.name,
+                'user': st.secrets.database.user,
+                'password': st.secrets.database.password
+            }
+        else:
+            # Use environment variables (for local development)
+            from dotenv import load_dotenv
+            load_dotenv()
+            return {
+                'host': os.getenv('DB_HOST'),
+                'port': int(os.getenv('DB_PORT', 3306)),
+                'database': os.getenv('DB_NAME'),
+                'user': os.getenv('DB_USER'),
+                'password': os.getenv('DB_PASSWORD')
+            }
+    except Exception as e:
+        st.error(f"Database configuration error: {e}")
+        return None
+
+def create_connection():
+    """Create a database connection"""
+    config = get_db_config()
+    if not config:
+        return None
+    
+    try:
+        connection = mysql.connector.connect(**config)
+        return connection
+    except Error as e:
+        st.error(f"Database connection error: {e}")
+        return None
+
+def save_to_database(data):
+    """Save data to MySQL database"""
+    connection = create_connection()
+    if not connection:
+        return False
+    
+    try:
+        cursor = connection.cursor()
+        
+        # Insert query
+        insert_query = """
+        INSERT INTO movement_screen (
+            event_id, name, age, date, throws, hits, weight, height, 
+            timestamp, screen_id, hips_r_hip_er, hips_r_hip_ir, 
+            hips_l_hip_er, hips_l_hip_ir, tspine_tspine_rot_l, 
+            tspine_tspine_rot_r, shoulder_r_sh_er, shoulder_r_sh_ir, 
+            shoulder_l_sh_er, shoulder_l_sh_ir, shoulder_r_sh_flx, 
+            shoulder_l_sh_flx
+        ) VALUES (
+            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 
+            %s, %s, %s, %s, %s, %s, %s, %s
+        )
+        """
+        
+        # Prepare data tuple
+        values = (
+            data['event_id'], data['name'], data['age'], data['date'],
+            data['throws'], data['hits'], data['weight'], data['height'],
+            data['timestamp'], data['screen_id'], data['hips_r_hip_er'],
+            data['hips_r_hip_ir'], data['hips_l_hip_er'], data['hips_l_hip_ir'],
+            data['tspine_tspine_rot_l'], data['tspine_tspine_rot_r'],
+            data['shoulder_r_sh_er'], data['shoulder_r_sh_ir'],
+            data['shoulder_l_sh_er'], data['shoulder_l_sh_ir'],
+            data['shoulder_r_sh_flx'], data['shoulder_l_sh_flx']
+        )
+        
+        cursor.execute(insert_query, values)
+        connection.commit()
+        return True
+        
+    except Error as e:
+        st.error(f"Database insert error: {e}")
+        return False
+    finally:
+        if connection.is_connected():
+            cursor.close()
+            connection.close()
+
+def load_from_database():
+    """Load data from MySQL database"""
+    connection = create_connection()
+    if not connection:
+        return pd.DataFrame()
+    
+    try:
+        query = """
+        SELECT * FROM movement_screen 
+        ORDER BY timestamp DESC 
+        LIMIT 100
+        """
+        df = pd.read_sql(query, connection)
+        return df
+        
+    except Error as e:
+        st.error(f"Database query error: {e}")
+        return pd.DataFrame()
+    finally:
+        if connection.is_connected():
+            connection.close()
 
 # Initialize session state for data storage
 if 'current_data' not in st.session_state:
@@ -59,9 +172,21 @@ def validate_inputs(name, event_id, age, weight, height):
     
     return errors
 
-# Function to save data
+# Function to save data (CSV backup + Database)
 def save_data(data):
-    """Save measurement data to JSON and CSV files"""
+    """Save measurement data to database and CSV backup"""
+    success = False
+    
+    # Try to save to database first
+    db_success = save_to_database(data)
+    
+    if db_success:
+        st.success("✅ Data saved to database successfully!")
+        success = True
+    else:
+        st.warning("⚠️ Database save failed, saving to local backup...")
+    
+    # Always create CSV backup (for local development)
     try:
         # Create data directory if it doesn't exist
         if not os.path.exists("data"):
@@ -103,7 +228,11 @@ def save_data(data):
             # No existing CSV, create new
             df_new.to_csv("data/all_screens.csv", index=False)
         
-        return filename
+        if not db_success:
+            st.info(f"📁 Local backup saved: {filename}")
+            success = True
+        
+        return filename if success else None
     
     except Exception as e:
         st.error(f"Error saving data: {e}")
@@ -120,6 +249,13 @@ if 'measurement_results' not in st.session_state:
 # Header section
 st.title("🥎 Softball Mobility Screen")
 st.markdown("### Range of Motion Assessment Tool")
+
+# Database connection status
+config = get_db_config()
+if config:
+    st.success("🗄️ Database connected")
+else:
+    st.warning("⚠️ Database not configured - using local storage only")
 
 # Create two columns for the form layout
 col1, col2 = st.columns(2)
@@ -217,9 +353,6 @@ with col2:
             saved_file = save_data(data)
             
             if saved_file:
-                st.success(f"✅ Screen results saved successfully!")
-                st.info(f"File: {saved_file}")
-                
                 # Show summary
                 st.subheader("📊 Assessment Summary")
                 summary_cols = st.columns(len(MEASUREMENTS))
@@ -243,43 +376,55 @@ with col2:
 st.divider()
 st.subheader("📋 Previous Assessments")
 
-if os.path.exists("data/all_screens.csv"):
-    try:
-        all_data = pd.read_csv("data/all_screens.csv")
-        
-        if not all_data.empty:
-            # Show a more complete view of the data
-            with st.expander("View All Data Columns"):
-                st.dataframe(all_data, use_container_width=True)
-            
-            # Show a simplified view for quick reference
-            st.subheader("Recent Assessments")
-            basic_columns = ['name', 'event_id', 'date', 'throws', 'hits', 'weight', 'height']
-            
-            # Add measurement columns if they exist
-            for group in MEASUREMENTS:
-                for measurement in MEASUREMENTS[group]:
-                    measurement_key = f"{group}_{measurement}"
-                    field_key = measurement_key.lower().replace(" ", "_").replace("-", "_").replace("(", "").replace(")", "").replace("/", "_")
-                    if field_key in all_data.columns:
-                        basic_columns.append(field_key)
-            
-            # Filter to only existing columns
-            existing_columns = [col for col in basic_columns if col in all_data.columns]
-            
-            # Show most recent 10 entries
-            recent_data = all_data[existing_columns].tail(10)
-            st.dataframe(recent_data, use_container_width=True)
-            
-            # Show total count
-            st.info(f"Total assessments recorded: {len(all_data)}")
-        else:
-            st.info("No assessment data available yet.")
+# Try to load from database first, fallback to CSV
+all_data = load_from_database()
+
+if all_data.empty:
+    # Fallback to CSV if database not available
+    if os.path.exists("data/all_screens.csv"):
+        try:
+            all_data = pd.read_csv("data/all_screens.csv")
+        except Exception as e:
+            st.warning(f"Could not load CSV data: {e}")
+            all_data = pd.DataFrame()
+
+if not all_data.empty:
+    # Show a more complete view of the data
+    with st.expander("View All Data Columns"):
+        st.dataframe(all_data, use_container_width=True)
     
-    except Exception as e:
-        st.warning(f"Could not load previous assessment data: {e}")
+    # Download button for CSV export
+    csv_data = all_data.to_csv(index=False)
+    st.download_button(
+        label="📥 Download All Data as CSV",
+        data=csv_data,
+        file_name=f"mobility_screen_data_{datetime.datetime.now().strftime('%Y%m%d')}.csv",
+        mime="text/csv"
+    )
+    
+    # Show a simplified view for quick reference
+    st.subheader("Recent Assessments")
+    basic_columns = ['name', 'event_id', 'date', 'throws', 'hits', 'weight', 'height']
+    
+    # Add measurement columns if they exist
+    for group in MEASUREMENTS:
+        for measurement in MEASUREMENTS[group]:
+            measurement_key = f"{group}_{measurement}"
+            field_key = measurement_key.lower().replace(" ", "_").replace("-", "_").replace("(", "").replace(")", "").replace("/", "_")
+            if field_key in all_data.columns:
+                basic_columns.append(field_key)
+    
+    # Filter to only existing columns
+    existing_columns = [col for col in basic_columns if col in all_data.columns]
+    
+    # Show most recent 10 entries
+    recent_data = all_data[existing_columns].head(10)
+    st.dataframe(recent_data, use_container_width=True)
+    
+    # Show total count
+    st.info(f"Total assessments recorded: {len(all_data)}")
 else:
-    st.info("No previous assessment data available.")
+    st.info("No assessment data available yet.")
 
 # Footer
 st.divider()
