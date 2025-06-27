@@ -72,10 +72,10 @@ def save_to_database(data):
             hips_l_hip_er, hips_l_hip_ir, tspine_tspine_rot_l, 
             tspine_tspine_rot_r, shoulder_r_sh_er, shoulder_r_sh_ir, 
             shoulder_l_sh_er, shoulder_l_sh_ir, shoulder_r_sh_flx, 
-            shoulder_l_sh_flx
+            shoulder_l_sh_flx, grip_grip_str_r, grip_grip_str_l
         ) VALUES (
             %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 
-            %s, %s, %s, %s, %s, %s, %s, %s
+            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
         )
         """
         
@@ -88,7 +88,8 @@ def save_to_database(data):
             data['tspine_tspine_rot_l'], data['tspine_tspine_rot_r'],
             data['shoulder_r_sh_er'], data['shoulder_r_sh_ir'],
             data['shoulder_l_sh_er'], data['shoulder_l_sh_ir'],
-            data['shoulder_r_sh_flx'], data['shoulder_l_sh_flx']
+            data['shoulder_r_sh_flx'], data['shoulder_l_sh_flx'],
+            data['grip_grip_str_r'], data['grip_grip_str_l']
         )
         
         cursor.execute(insert_query, values)
@@ -131,25 +132,29 @@ if 'current_data' not in st.session_state:
 if 'measurement_results' not in st.session_state:
     st.session_state.measurement_results = {}
 
-# Define simplified measurement structure with 3 key mobility groups
+# Define simplified measurement structure with 4 key mobility groups
 MEASUREMENTS = {
     "Hips": {
-        "R Hip ER": {"unit": "degrees", "min": 0, "max": 180},
-        "R Hip IR": {"unit": "degrees", "min": 0, "max": 180},
-        "L Hip ER": {"unit": "degrees", "min": 0, "max": 180},
-        "L Hip IR": {"unit": "degrees", "min": 0, "max": 180}
+        "R Hip ER": {"unit": "degrees", "min": 0, "max": 360},
+        "R Hip IR": {"unit": "degrees", "min": 0, "max": 360},
+        "L Hip ER": {"unit": "degrees", "min": 0, "max": 360},
+        "L Hip IR": {"unit": "degrees", "min": 0, "max": 360}
     },
     "Tspine": {
-        "Tspine Rot L": {"unit": "degrees", "min": 0, "max": 180},
-        "Tspine Rot R": {"unit": "degrees", "min": 0, "max": 180}
+        "Tspine Rot L": {"unit": "degrees", "min": 0, "max": 360},
+        "Tspine Rot R": {"unit": "degrees", "min": 0, "max": 360}
     },
     "Shoulder": {
-        "R Sh ER": {"unit": "degrees", "min": 0, "max": 180},
-        "R Sh IR": {"unit": "degrees", "min": 0, "max": 180},
-        "L Sh ER": {"unit": "degrees", "min": 0, "max": 180},
-        "L Sh IR": {"unit": "degrees", "min": 0, "max": 180},
-        "R Sh Flx": {"unit": "degrees", "min": 0, "max": 180},
-        "L Sh Flx": {"unit": "degrees", "min": 0, "max": 180}
+        "R Sh ER": {"unit": "degrees", "min": 0, "max": 360},
+        "R Sh IR": {"unit": "degrees", "min": 0, "max": 360},
+        "L Sh ER": {"unit": "degrees", "min": 0, "max": 360},
+        "L Sh IR": {"unit": "degrees", "min": 0, "max": 360},
+        "R Sh Flx": {"unit": "degrees", "min": 0, "max": 360},
+        "L Sh Flx": {"unit": "degrees", "min": 0, "max": 360}
+    },
+    "Grip": {
+        "Grip Str R": {"unit": "degrees", "min": 0, "max": 360},
+        "Grip Str L": {"unit": "degrees", "min": 0, "max": 360}
     }
 }
 
@@ -281,7 +286,7 @@ tabs = st.tabs([f"🏃 {group}" for group in MEASUREMENTS.keys()])
 for i, group in enumerate(MEASUREMENTS.keys()):
     with tabs[i]:
         st.header(f"{group} Range of Motion")
-        st.markdown(f"*Record measurements in degrees (0-180°)*")
+        st.markdown(f"*Record measurements in degrees (0-360°)*")
         
         # Create each measurement within the group
         for measurement in MEASUREMENTS[group]:
@@ -304,7 +309,7 @@ for i, group in enumerate(MEASUREMENTS.keys()):
                     step=1,
                     key=f"input_{measurement_key}",
                     label_visibility="collapsed",
-                    help=f"Enter {measurement} measurement in degrees"
+                    help=f"Enter {measurement} measurement in degrees (0-360°)"
                 )
                 
                 # Store the value in session state
@@ -347,7 +352,8 @@ with col2:
                     
                     # Get the measurement value from session state
                     value = st.session_state.measurement_results[measurement_key]
-                    data[field_key] = int(value)
+                    # Save NULL instead of 0 for empty measurements
+                    data[field_key] = int(value) if value > 0 else None
             
             # Save data
             saved_file = save_data(data)
